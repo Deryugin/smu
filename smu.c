@@ -30,6 +30,7 @@ static int doparagraph(const char *begin, const char *end, int newblock); /* Par
 static int doreplace(const char *begin, const char *end, int newblock);   /* Parser for simple replaces */
 static int doshortlink(const char *begin, const char *end, int newblock); /* Parser for links and images */
 static int dosurround(const char *begin, const char *end, int newblock);  /* Parser for surrounding tags */
+static int domultisurround(const char *begin, const char *end, int newblock);  /* Parser for surrounding tags */
 static int dounderline(const char *begin, const char *end, int newblock); /* Parser for underline tags */
 static void *ereallocz(void *p, size_t size);
 static void hprint(const char *begin, const char *end);                   /* escapes HTML and prints it to output */
@@ -37,8 +38,8 @@ static void process(const char *begin, const char *end, int isblock);     /* Pro
 
 /* list of parsers */
 static Parser parsers[] = { dounderline, docomment, dolineprefix,
-                            dolist, doparagraph, dogtlt, dosurround, dolink,
-                            doshortlink, dohtml, doamp, doreplace };
+                            dolist, doparagraph, dogtlt, domultisurround, dolink,
+                            doshortlink, dohtml, doamp, doreplace, dosurround };
 static int nohtml = 0;
 
 static Tag lineprefix[] = {
@@ -57,6 +58,10 @@ static Tag lineprefix[] = {
 static Tag underline[] = {
 	{ "=",		1,	"<h1>",		"</h1>\n" },
 	{ "-",		1,	"<h2>",		"</h2>\n" },
+};
+
+static Tag multisurround[] = {
+	{ "```",		0,	"<code>",	"</code>" },
 };
 
 static Tag surround[] = {
@@ -383,10 +388,32 @@ dolist(const char *begin, const char *end, int newblock) {
 int
 doparagraph(const char *begin, const char *end, int newblock) {
 	const char *p;
+	const char *m1, *m2;
 
 	if(!newblock)
 		return 0;
+
+	/* printf("Paragraph@%s@len %ld\n", begin, end - begin); */
+
 	p = strstr(begin, "\n\n");
+	m1 = strstr(begin, "```");
+	if (m1 != NULL) {
+		m2 = strstr(m1 + 3, "```");
+	}
+
+
+	while (m1 != NULL && m2 != NULL && m1 < p) {
+	/* printf("step1 m1 %ld m2 %ld p %ld\n", m1-begin, m2-begin, p-begin);  */
+		m1 = strstr(m2 + 3, "```");
+		if (m2 > p) {
+			p = strstr(m2 + 3, "\n\n");
+		}
+		if (m1 != NULL) {
+			m2 = strstr(m1 + 3, "```");
+		}
+	/* printf("step2 m1 %ld m2 %ld p %ld\n", m1-begin, m2-begin, p-begin);  */
+	}
+
 	if(!p || p > end)
 		p = end;
 	if(p - begin <= 1)
@@ -493,6 +520,37 @@ dosurround(const char *begin, const char *end, int newblock) {
 }
 
 int
+domultisurround(const char *begin, const char *end, int newblock) {
+	unsigned int i, l;
+	const char *p, *start, *stop;
+
+	/* printf("####try %ld@%s@\n", end - begin, begin); */
+	for(i = 0; i < LENGTH(multisurround); i++) {
+		l = strlen(multisurround[i].search);
+		if(end - begin < 2*l || strncmp(begin, multisurround[i].search, l) != 0)
+			continue;
+		start = begin + l;
+		p = start - 1;
+		do {
+			stop = p;
+			p = strstr(p + 1, multisurround[i].search);
+		} while(p && p[-1] == '\\');
+		if (p && p[-1] != '\\')
+			stop = p;
+		if(!stop || stop < start || stop >= end)
+			continue;
+		fputs(multisurround[i].before, stdout);
+		if(multisurround[i].process)
+			process(start, stop, 0);
+		else
+			hprint(start, stop);
+		fputs(multisurround[i].after, stdout);
+		return stop - begin + l;
+	}
+	return 0;
+}
+
+int
 dounderline(const char *begin, const char *end, int newblock) {
 	unsigned int i, j, l;
 	const char *p;
@@ -562,6 +620,7 @@ process(const char *begin, const char *end, int newblock) {
 				if(++p == end)
 					return;
 		affected = 0;
+		/* printf("parser diff %ld\n", end -p); */
 		for(i = 0; i < LENGTH(parsers) && !affected; i++)
 			affected = parsers[i](p, end, newblock);
 		p += abs(affected);
